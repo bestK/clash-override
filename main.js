@@ -2,6 +2,39 @@
 // Clash 覆写脚本
 // ============================================================
 
+// ------------------------------------------------------------
+// 机器开关
+// 三台机器共用这一份脚本，复制到目标机器后只改下面这一行：
+//   'home-imac'    家 iMac：Apple Music DNS 修复 + Tailscale MagicDNS
+//   'home-macmini' 家 Mac mini：在上面基础上让 cloudflared 直连 CF 边缘
+//                  （这台机器是 zeeho 等域名的 Cloudflare Tunnel 宿主）
+//   'windows'      Windows / Mihomo Party
+// ------------------------------------------------------------
+const MACHINE = 'home-imac';
+
+const MACHINE_PROFILES = {
+    'home-imac': {
+        dnsOverride: false,     // 用脚本内置的精简 fake-ip DNS 覆盖订阅 DNS
+        appleDnsFix: true,      // Apple Music CNAME 链修复（切 fake-ip）
+        tailnetDns: true,       // Tailscale MagicDNS 定向分流
+        cfTunnelDirect: false   // Cloudflare Tunnel 边缘直连
+    },
+    'home-macmini': {
+        dnsOverride: false,
+        appleDnsFix: true,
+        tailnetDns: true,
+        cfTunnelDirect: true
+    },
+    'windows': {
+        dnsOverride: false,
+        appleDnsFix: false,
+        tailnetDns: true,
+        cfTunnelDirect: false
+    }
+};
+
+const MACHINE_CONFIG = MACHINE_PROFILES[MACHINE] || MACHINE_PROFILES['home-imac'];
+
 // 需要排除的节点名称正则（排除下载/测试/充值等非节点条目）
 const excludeRegex = /^(?!.*(下载|测试|充值|余额|分割线|群|官网|失联|邮件)).*/u;
 
@@ -211,16 +244,52 @@ function speedGroup(name, proxies, tolerance) {
 //   明文 DNS 在 fake-ip 模式下由内核经代理隧道转发，不受此影响。
 // ------------------------------------------------------------
 // DNS 覆写总开关。TUN 下优先使用精简 fake-ip DNS，避免小程序加载时真实 DNS 风暴。
-const DNS_OVERRIDE = true;
+const DNS_OVERRIDE = MACHINE_CONFIG.dnsOverride;
 
 // TUN + 小程序短连接场景下，sniffer 会放大 CPU 峰值；DNS hijack 足够支撑常规域名规则。
 const SNIFFER_OVERRIDE = true;
+
+// ------------------------------------------------------------
+// Apple Music DNS 修复
+// 背景：redir-host 下 mihomo 会把 Apple 的 CNAME 链原样返回
+//   (amp-api.music.apple.com → *.akadns.net → *.fastly.net)。
+//   macOS 的 mDNSResponder 会把中间 akadns 名字一起缓存；中间名 TTL 到期后
+//   它会直接去查这个中间名，而 akadns 对所有公共 DNS 都返回 SERVFAIL
+//   (223.5.5.5 / 119.29.29.29 / 8.8.8.8 / 1.1.1.1 都试过)，
+//   于是 amp-api.music.apple.com / is*-ssl.mzstatic.com 解析失败，
+//   Music 报「完成请求时出现临时问题」。
+// 修复：改用 fake-ip，系统只拿到 198.18.x.x，没有 CNAME 链可跟。
+// 回退：把 APPLE_DNS_FIX 改成 false 即可。
+// ------------------------------------------------------------
+const APPLE_DNS_FIX = MACHINE_CONFIG.appleDnsFix;
+const FAKE_IP_TTL = 60;
 
 // 外部控制器（RESTful API）开关。开启后可用 http://127.0.0.1:9090 查询/调试节点
 // 排查完建议关掉（避免本地端口长期暴露控制接口）
 const EXTERNAL_CONTROLLER = true;
 const CONTROLLER_ADDR = '127.0.0.1:9090';
 const CONTROLLER_SECRET = ''; // 留空表示本地无密钥访问
+
+// ------------------------------------------------------------
+// Tailscale MagicDNS 定向分流
+// 背景：关闭 accept-dns 后（避免 MagicDNS 劫持系统 DNS 导致 TUN 下解析被污染），
+//   系统不再认识 tailnet 短名。这里让内核把 *.kk.example.com 单独交给
+//   Tailscale 的本地 DNS（100.100.100.100，走 utun4 直连），其余域名不受影响。
+// 注意：100.100.100.100 属于 100.64.0.0/10，已被规则集判定为 DIRECT，
+//   且系统路由 100.100.100.100/32 指向 utun4，不会回环进 TUN。
+// ------------------------------------------------------------
+const TAILNET_DOMAIN = 'kk.example.com';
+const TAILNET_DNS = '100.100.100.100';
+const TAILNET_DNS_ENABLED = MACHINE_CONFIG.tailnetDns;
+
+// ------------------------------------------------------------
+// Cloudflare Tunnel 直连
+// home-macmini 上跑着 cloudflared，边缘地址是 198.41.192.0/24 和
+// 198.41.200.0/24。脚本里有 DOMAIN-KEYWORD,cloudflare 走代理的规则，
+// 机场节点一挂隧道就整体掉线，所以这台机器上把 CF 边缘和
+// argotunnel/cftunnel 强制直连，隧道不再依赖代理。
+// ------------------------------------------------------------
+const CF_TUNNEL_DIRECT = MACHINE_CONFIG.cfTunnelDirect;
 
 const FOREIGN_DNS = ['8.8.8.8', '1.1.1.1'];
 const CN_DNS = ['223.5.5.5', '119.29.29.29'];
@@ -280,7 +349,12 @@ const snifferConfig = {
     enable: false,
     'force-dns-mapping': false,
     'parse-pure-ip': false,
-    'override-destination': false
+    'override-destination': false,
+    // 即使以后打开 sniffer，也不要嗅探隧道域名，否则目标会被改写成
+    // 域名后重新解析，argotunnel.com 本身没有 A 记录，会直接失败。
+    ...(CF_TUNNEL_DIRECT
+        ? { 'skip-domain': ['argotunnel.com', 'cftunnel.com'] }
+        : {})
 };
 
 // 获取符合正则的节点名（附带排除过滤）
@@ -419,6 +493,11 @@ function main(config) {
     if (DNS_OVERRIDE) {
         config.dns = dnsConfig;
     }
+    // 先定 fake-ip 模式，applyTailnetDnsPolicy 才能把 tailnet 域名补进 fake-ip-filter
+    applyAppleDnsFix(config);
+    if (TAILNET_DNS_ENABLED) {
+        applyTailnetDnsPolicy(config);
+    }
     if (SNIFFER_OVERRIDE) {
         config.sniffer = snifferConfig;
     }
@@ -430,10 +509,70 @@ function main(config) {
 }
 
 // ------------------------------------------------------------
+// Tailscale MagicDNS 定向分流
+// 在订阅自带 DNS 的基础上打补丁：只把 tailnet 域名指向 100.100.100.100，
+// 其余解析逻辑（DoH 上游、redir-host/fake-ip 模式）保持订阅原样。
+// ------------------------------------------------------------
+function applyTailnetDnsPolicy(config) {
+    const dns = config.dns || (config.dns = {});
+    const policyKey = `+.${TAILNET_DOMAIN}`;
+
+    // 1. 定向解析策略：tailnet 域名交给 Tailscale 本地 DNS
+    dns['nameserver-policy'] = {
+        ...(dns['nameserver-policy'] || {}),
+        [policyKey]: TAILNET_DNS,
+        [TAILNET_DOMAIN]: TAILNET_DNS
+    };
+
+    // 2. fake-ip 模式下必须把 tailnet 域名排除，否则拿到 198.18.x.x 虚拟 IP，
+    //    Tailscale 的接口地址解析会失败。
+    if (dns['enhanced-mode'] === 'fake-ip') {
+        const filter = dns['fake-ip-filter'] || (dns['fake-ip-filter'] = []);
+        for (const entry of [policyKey, `*.${TAILNET_DOMAIN}`, TAILNET_DOMAIN]) {
+            if (!filter.includes(entry)) filter.push(entry);
+        }
+    }
+
+    // 3. respect-rules 开启时，内核会用 proxy-server-nameserver 解析代理服务器域名。
+    //    tailnet 内可能有代理服务器，补进去避免解析失败。
+    if (dns['respect-rules']) {
+        const psn = dns['proxy-server-nameserver'] || (dns['proxy-server-nameserver'] = []);
+        if (Array.isArray(psn) && !psn.includes(TAILNET_DNS)) psn.push(TAILNET_DNS);
+    }
+}
+
+// ------------------------------------------------------------
+// Apple Music DNS 修复：切到 fake-ip，避免 macOS 跟踪 CNAME 链。
+// 只改解析模式，nameserver / 订阅自带的其他 DNS 设置保持原样。
+// ------------------------------------------------------------
+function applyAppleDnsFix(config) {
+    if (!APPLE_DNS_FIX) return;
+    const dns = config.dns || (config.dns = {});
+
+    dns['enhanced-mode'] = 'fake-ip';
+    dns['fake-ip-range'] = dns['fake-ip-range'] || '198.18.0.1/16';
+    dns['fake-ip-filter-mode'] = dns['fake-ip-filter-mode'] || 'blacklist';
+    // 默认 1 秒会让系统每秒重查一次，这里放宽到 60 秒。
+    dns['fake-ip-ttl'] = FAKE_IP_TTL;
+
+    // fake-ip 下这些域名必须拿真实 IP（时间同步/连通性探测/局域网等），
+    // 订阅里已有的过滤表保留，只补几条常见的。
+    const filter = dns['fake-ip-filter'] || (dns['fake-ip-filter'] = []);
+    for (const entry of [
+        '*.lan', '*.local', '*.localhost', '*.home.arpa',
+        '+.msftconnecttest.com', '+.msftncsi.com', 'dns.msftncsi.com',
+        'time.*.com', 'time.*.apple.com', '+.pool.ntp.org',
+        'stun.*.*', 'stun.*.*.*'
+    ]) {
+        if (!filter.includes(entry)) filter.push(entry);
+    }
+}
+
+// ------------------------------------------------------------
 // 规则列表（顺序敏感，从上到下匹配）
 // ------------------------------------------------------------
 function buildRules() {
-    return [
+    const rules = [
         // ===== 自定义直连 / 指定分流 =====
         // 微信小程序高频域名放最前面，避免 TUN 下反复扫大规则集
         'PROCESS-NAME,Weixin.exe,🎯 全球直连',
@@ -553,6 +692,8 @@ function buildRules() {
         'DOMAIN-SUFFIX,supabase.co,🚀 节点选择',
         'DOMAIN-SUFFIX,supabase.com,🚀 节点选择',
         'DOMAIN-KEYWORD,tailscale,🎯 全球直连',
+        // tailnet 内主机名统一直连（配合 applyTailnetDnsPolicy 的定向解析）
+        ...(TAILNET_DNS_ENABLED ? [`DOMAIN-SUFFIX,${TAILNET_DOMAIN},DIRECT`] : []),
         'PROCESS-NAME,tailscale.exe,DIRECT',
         'PROCESS-NAME,tailscaled.exe,DIRECT',
         'DOMAIN-KEYWORD,dmxsmart.com,🎯 全球直连',
@@ -634,6 +775,7 @@ function buildRules() {
 
         // ===== 私有网段 =====
         'IP-CIDR,10.0.0.0/8,DIRECT',
+        'IP-CIDR,100.64.0.0/10,DIRECT,no-resolve',
         'IP-CIDR,172.16.0.0/12,DIRECT',
         'IP-CIDR,192.168.0.0/16,DIRECT',
         'IP-CIDR,169.254.0.0/16,DIRECT',
@@ -643,10 +785,21 @@ function buildRules() {
         // ===== 兜底 =====
         'MATCH,🐟 漏网之鱼'
     ];
+
+    // Cloudflare Tunnel 边缘直连：必须排在 DOMAIN-KEYWORD,cloudflare 之前
+    if (CF_TUNNEL_DIRECT) {
+        rules.unshift(
+            'IP-CIDR,198.41.192.0/24,DIRECT,no-resolve',
+            'IP-CIDR,198.41.200.0/24,DIRECT,no-resolve',
+            'DOMAIN-SUFFIX,argotunnel.com,DIRECT',
+            'DOMAIN-SUFFIX,cftunnel.com,DIRECT'
+        );
+    }
+
+    return rules;
 }
 
 // 模块导出（兼容 Node 环境测试；Clash 运行时忽略）
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { main };
 }
-
