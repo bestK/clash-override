@@ -27,7 +27,7 @@ const MACHINE_PROFILES = {
         cfTunnelDirect: true
     },
     'windows': {
-        dnsOverride: false,
+        dnsOverride: true,      // 订阅私有 DoH 递归出口在国外,who.1ms.dog 报 DNS 泄露,同 home-imac 修复
         appleDnsFix: false,
         tailnetDns: true,
         cfTunnelDirect: false
@@ -294,7 +294,10 @@ const CF_TUNNEL_DIRECT = MACHINE_CONFIG.cfTunnelDirect;
 
 // 国外 DNS 用 Google + Quad9 的 DoH(IP 直连免 bootstrap):
 // 不用 Cloudflare 1.1.1.1 —— 其递归解析出口固定在日本 POP,who.1ms.dog 会报"解析器在日本,IP 在新加坡"
-const FOREIGN_DNS = ['https://8.8.8.8/dns-query', 'https://9.9.9.9/dns-query'];
+// #自定义代理 = mihomo DoH 指定代理(adapter)语法:DoH 查询固定走自建节点组(SGW/USW)。
+// 不用「节点选择」—— 其默认选中的 ♻️自动选择 在 select 模式下可能是死节点,DoH 失败后内核
+// 退回明文 53(nameserver=223/119),权威看到国内 ISP 递归出口,who.1ms.dog 报 DNS 泄露
+const FOREIGN_DNS = ['https://8.8.8.8/dns-query#自定义代理', 'https://9.9.9.9/dns-query#自定义代理'];
 const CN_DNS = ['223.5.5.5', '119.29.29.29'];
 
 const dnsConfig = {
@@ -589,6 +592,10 @@ function buildRules() {
         'DOMAIN-SUFFIX,claude.com,自定义代理',
         'DOMAIN-SUFFIX,anthropic.dev,自定义代理',
         'DOMAIN-SUFFIX,claudeusercontent.com,自定义代理',
+        // IP 检测站(who.1ms.dog 等)也固定走自建出口,让检测页主 IP 与 claude 一致显示 sgw
+        'DOMAIN-SUFFIX,1ms.dog,自定义代理',
+        'DOMAIN-SUFFIX,ip-api.com,自定义代理',
+        'DOMAIN-SUFFIX,ip.sb,自定义代理',
 
         // ===== 自定义直连 / 指定分流 =====
         // 微信小程序高频域名放最前面，避免 TUN 下反复扫大规则集
