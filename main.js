@@ -336,9 +336,14 @@ const dnsConfig = {
     // 国外域名走国外明文 DNS（经代理隧道转发，防污染且不被握手拦截）
     fallback: FOREIGN_DNS,
     // 分流策略：国内域名直接命中国内 DNS，国外域名命中国外 DNS
+    // EDNS 回显类探针(edns.ip-api.com / controld)不在 geosite 名单里,若走国内 nameserver,
+    // 权威会看到阿里/腾讯递归出口,who.1ms.dog 报"解析器在中国,IP 在新加坡",故显式指到国外 DNS
     'nameserver-policy': {
         'geosite:cn,private': CN_DNS,
-        'geosite:geolocation-!cn': FOREIGN_DNS
+        'geosite:geolocation-!cn': FOREIGN_DNS,
+        '+.ip-api.com': FOREIGN_DNS,
+        '+.controld.com': FOREIGN_DNS,
+        '+.1ms.dog': FOREIGN_DNS
     },
     // fallback 触发条件：国外 DNS 返回国内 IP 时判定为污染，改用 fallback 结果
     'fallback-filter': {
