@@ -14,7 +14,8 @@ const MACHINE = 'home-imac';
 
 const MACHINE_PROFILES = {
     'home-imac': {
-        dnsOverride: false,     // 用脚本内置的精简 fake-ip DNS 覆盖订阅 DNS
+        dnsOverride: true,      // 用脚本内置的精简 fake-ip DNS 覆盖订阅 DNS
+                                // (订阅私有 DoH 递归出口在日本,who.1ms.dog 报"DNS 泄露:解析器在日本,IP 在新加坡")
         appleDnsFix: true,      // Apple Music CNAME 链修复（切 fake-ip）
         tailnetDns: true,       // Tailscale MagicDNS 定向分流
         cfTunnelDirect: false   // Cloudflare Tunnel 边缘直连
@@ -291,7 +292,9 @@ const TAILNET_DNS_ENABLED = MACHINE_CONFIG.tailnetDns;
 // ------------------------------------------------------------
 const CF_TUNNEL_DIRECT = MACHINE_CONFIG.cfTunnelDirect;
 
-const FOREIGN_DNS = ['8.8.8.8', '1.1.1.1'];
+// 国外 DNS 用 Google + Quad9 的 DoH(IP 直连免 bootstrap):
+// 不用 Cloudflare 1.1.1.1 —— 其递归解析出口固定在日本 POP,who.1ms.dog 会报"解析器在日本,IP 在新加坡"
+const FOREIGN_DNS = ['https://8.8.8.8/dns-query', 'https://9.9.9.9/dns-query'];
 const CN_DNS = ['223.5.5.5', '119.29.29.29'];
 
 const dnsConfig = {
@@ -573,6 +576,15 @@ function applyAppleDnsFix(config) {
 // ------------------------------------------------------------
 function buildRules() {
     const rules = [
+        // ===== Claude/Anthropic 固定出口 =====
+        // claude.ai 检测到的 IP 必须稳定为 sgw-oracle-01(149.118.50.173),
+        // 固定走「自定义代理」组(SGW自建-经港前置),不随 🤖 AI / 节点选择 的手动切换漂移
+        'DOMAIN-SUFFIX,anthropic.com,自定义代理',
+        'DOMAIN-SUFFIX,claude.ai,自定义代理',
+        'DOMAIN-SUFFIX,claude.com,自定义代理',
+        'DOMAIN-SUFFIX,anthropic.dev,自定义代理',
+        'DOMAIN-SUFFIX,claudeusercontent.com,自定义代理',
+
         // ===== 自定义直连 / 指定分流 =====
         // 微信小程序高频域名放最前面，避免 TUN 下反复扫大规则集
         'PROCESS-NAME,Weixin.exe,🎯 全球直连',
