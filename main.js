@@ -14,8 +14,7 @@ const MACHINE = 'home-imac';
 
 const MACHINE_PROFILES = {
     'home-imac': {
-        dnsOverride: true,      // 用脚本内置的精简 fake-ip DNS 覆盖订阅 DNS
-                                // (订阅私有 DoH 递归出口在日本,who.1ms.dog 报"DNS 泄露:解析器在日本,IP 在新加坡")
+        dnsOverride: false,     // 使用订阅自带 DNS，保留 Apple Music 与 Tailscale 修复
         appleDnsFix: true,      // Apple Music CNAME 链修复（切 fake-ip）
         tailnetDns: true,       // Tailscale MagicDNS 定向分流
         cfTunnelDirect: false   // Cloudflare Tunnel 边缘直连
@@ -27,7 +26,7 @@ const MACHINE_PROFILES = {
         cfTunnelDirect: true
     },
     'windows': {
-        dnsOverride: true,      // 订阅私有 DoH 递归出口在国外,who.1ms.dog 报 DNS 泄露,同 home-imac 修复
+        dnsOverride: false,     // 使用订阅自带 DNS，保留 Tailscale 定向解析
         appleDnsFix: false,
         tailnetDns: true,
         cfTunnelDirect: false

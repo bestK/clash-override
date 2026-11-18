@@ -18,6 +18,7 @@ const MACHINE = 'home-imac'; // 改这里：home-imac / home-macmini / windows
 
 - 按地区/用途重新分组订阅节点（HK、TW、JP、US、SG、KR、UK 等），剔除下载/测试/充值/官网这类非节点条目。
 - 统一规则集：Loyalsoldier 的 reject / proxy / direct / ChinaDomain / ChinaCompanyIp 等，加上 AI 规则和自定义直连规则。
+- `dnsOverride` 默认在三台机器上关闭，普通域名使用订阅自带 DNS；Tailscale 定向解析、Apple Music 修复和 TCP 22 直连独立保留。
 - `appleDnsFix`（两台 Mac）：修复 Apple Music 的 CNAME 链在 fake-ip 下解析失败的问题。
 - `tailnetDns`（三台机器）：将 `TAILNET_DOMAIN`（当前为 `kk.example.com`）交给 Tailscale DNS，并排除 Fake-IP；Windows 显式绑定 `Tailscale` 接口，普通域名的上游保持不变。
 - SSH 默认端口：TCP 22 高优先级直连，避免订阅节点无法转发 SSH；非 22 端口仍按原有规则分流。
