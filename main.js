@@ -273,14 +273,15 @@ const CONTROLLER_SECRET = ''; // 留空表示本地无密钥访问
 
 // ------------------------------------------------------------
 // Tailscale MagicDNS 定向分流
-// 背景：关闭 accept-dns 后（避免 MagicDNS 劫持系统 DNS 导致 TUN 下解析被污染），
-//   系统不再认识 tailnet 短名。这里让内核把 *.kk.example.com 单独交给
-//   Tailscale 的本地 DNS（100.100.100.100，走 utun4 直连），其余域名不受影响。
-// 注意：100.100.100.100 属于 100.64.0.0/10，已被规则集判定为 DIRECT，
-//   且系统路由 100.100.100.100/32 指向 utun4，不会回环进 TUN。
+// 将 *.kk.example.com 单独交给 Tailscale 本地 DNS，其余域名保持原有分流。
+// Windows 需开启 Tailscale 的 accept-dns，由客户端维护短名搜索后缀。
+// Windows 的全局出站接口可能固定为以太网，DNS 查询须显式绑定 Tailscale，
+// 避免绕过系统的 100.100.100.100/32 路由而发往物理网络。
 // ------------------------------------------------------------
 const TAILNET_DOMAIN = 'kk.example.com';
-const TAILNET_DNS = '100.100.100.100';
+const TAILNET_DNS = MACHINE === 'windows'
+    ? '100.100.100.100#Tailscale'
+    : '100.100.100.100';
 const TAILNET_DNS_ENABLED = MACHINE_CONFIG.tailnetDns;
 
 // ------------------------------------------------------------
@@ -544,11 +545,14 @@ function applyTailnetDnsPolicy(config) {
         }
     }
 
-    // 3. respect-rules 开启时，内核会用 proxy-server-nameserver 解析代理服务器域名。
-    //    tailnet 内可能有代理服务器，补进去避免解析失败。
+    // 3. 代理服务器的 tailnet 域名也定向解析；不要把 Tailscale DNS 加入通用
+    //    上游列表（CN_DNS 被多个字段复用，push 会把普通域名也送给 Tailscale）。
     if (dns['respect-rules']) {
-        const psn = dns['proxy-server-nameserver'] || (dns['proxy-server-nameserver'] = []);
-        if (Array.isArray(psn) && !psn.includes(TAILNET_DNS)) psn.push(TAILNET_DNS);
+        dns['proxy-server-nameserver-policy'] = {
+            ...(dns['proxy-server-nameserver-policy'] || {}),
+            [policyKey]: TAILNET_DNS,
+            [TAILNET_DOMAIN]: TAILNET_DNS
+        };
     }
 }
 
@@ -584,6 +588,9 @@ function applyAppleDnsFix(config) {
 // ------------------------------------------------------------
 function buildRules() {
     const rules = [
+        // SSH 默认端口直连，避免订阅节点无法转发 SSH；非 22 端口保持原有分流。
+        'AND,((NETWORK,tcp),(DST-PORT,22)),DIRECT',
+
         // ===== Claude/Anthropic 固定出口 =====
         // claude.ai 检测到的 IP 必须稳定为 sgw-oracle-01(149.118.50.173),
         // 固定走「自定义代理」组(SGW自建-经港前置),不随 🤖 AI / 节点选择 的手动切换漂移
